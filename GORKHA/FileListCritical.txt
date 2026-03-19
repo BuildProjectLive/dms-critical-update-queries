@@ -1,0 +1,15 @@
+/LoginRequiredQueries.txt|2 FEB 2026
+/GBP_dashboard_brandWiseAchievement.sql|1 FEB 2026
+/GBP_dashboard_claimSales.sql|1 FEB 2026
+/GBP_dashboard_mainQuery.sql|1 FEB 2026
+/GBP_dashboard_mainQuery_monthwise.sql|1 FEB 2026
+/GBP_dashboard_overallStatus.sql|1 FEB 2026
+/GBP_dashboard_topTenParty.sql|2 FEB 2026
+/GBP_dashboard_topTenSKU.sql|1 FEB 2026
+/FN_UserHierarchy_Gorkha.sql|1 FEB 2026
+/GBP_secondaryStockReportforClaim_custom.sql|28 JAN 2026
+/GBP_outletMasterReport_detail.sql|28 JAN 2026
+/GBP_CLAIMREPORT_SUMMARY.sql|3 FEB 2026
+/GBP_CLAIMREPORT_SUMMARY_PRINTFORMAT.sql|16 FEB 2026
+/GBP_TransportBreakageLeakageClaim_PRINT.sql|4 FEB 2026
+/GBP_CLAIMREPORT_BILLWISEDETAIL.sql|24 FEB 2026

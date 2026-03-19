@@ -1,0 +1,346 @@
+CREATE OR ALTER       PROCEDURE [dbo].[GBP_CLAIMREPORT_SUMMARY_PRINTFORMAT]
+--DECLARE
+	@DATE1 DATE = NULL,
+	@DATE2 DATE = NULL,
+	@COMPANYID VARCHAR(255) = '%',
+	@ACID VARCHAR(100) = '%',
+	@CLAIMTYPE TINYINT = 0				-- 0 : Sales Claim || 1: Admin Calim || 2 : Brand Claim  || 3 : Tie-Up Calim
+
+AS
+
+/*
+SELECT @DATE1 = '2025-12-01' , @DATE2 = '2026-01-30' , @COMPANYID = '%' , @CLAIMTYPE = 5
+--*/
+
+
+DROP TABLE IF EXISTS #COMPSALES
+
+SELECT C.GORKHA_TYPE ExpenseTypeCode , TRIM(A.REFBILL) REFVCHR , A.VCHRNO , A.PARAC , A.TRNDATE , A.TRNTIME , B.MCODE , SUM(B.RealQty) COMPSALESQTY , SUM(AltQty) COMPSALESQTY_ALT , CONVERT(NUMERIC(32,4),IIF(ISNULL(MAU.CONFACTOR,0) = 0 , DP.COMPLEMENTARYRATE , DP.COMPLEMENTARYRATE / MAU.CONFACTOR)) COMPLEMENTARYRATE , CC.nav_name NavName , CC.nav_code NavCode , MI.MCODE ProductCode , MI.DESCA ProductName
+INTO #COMPSALES
+FROM TRNMAIN A 
+JOIN TRNPROD B ON A.VCHRNO = B.VCHRNO
+JOIN BATCHPRICE_MASTER BM ON B.MCODE = BM.MCODE AND B.BATCH = BM.BATCHCODE
+JOIN DetailPrice DP ON BM.PRICEID = DP.PRICEID AND BM.MCODE= DP.MCODE
+JOIN RMD_TRNMAIN_ADDITIONALINFO C ON A.VCHRNO = C.VCHRNO
+JOIN MENUITEM MI ON B.MCODE = MI.MCODE
+LEFT JOIN MULTIALTUNIT MAU WITH (NOLOCK) ON B.MCODE = MAU.MCODE AND MAU.ALTUNIT = 'CASE'
+LEFT JOIN RMD_ACLIST R ON MI.Supplier = R.ACID
+LEFT JOIN COMPANY CC WITH (NOLOCK) ON A.COMPANYID = CC.COMPANYID
+WHERE A.TRNDATE BETWEEN @DATE1 AND @DATE2 AND A.VoucherType = 'TI' AND C.GORKHA_TYPE IN ('PP','OP','NEV','TVB','TEX','BC','AC','MKB')
+AND (@COMPANYID = '%' OR A.COMPANYID IN (SELECT * FROM DBO.Split(@COMPANYID,',')))
+AND (@ACID = '%' OR R.ACID IN (SELECT * FROM DBO.Split(@ACID,',')))
+AND A.PCL = 'PC007'
+GROUP BY C.GORKHA_TYPE , TRIM(A.REFBILL) , A.PARAC , A.VCHRNO , A.TRNDATE , A.TRNTIME , B.MCODE , IIF(ISNULL(MAU.CONFACTOR,0) = 0 , DP.COMPLEMENTARYRATE , DP.COMPLEMENTARYRATE / MAU.CONFACTOR) , CC.nav_name , CC.nav_code , MI.MCODE , MI.DESCA
+
+
+DROP TABLE IF EXISTS #SALES
+
+SELECT A.VCHRNO , B.MCODE , SUM(RealQty) SALESQTY ,sum(AltQty) SALESQTY_ALT
+INTO #SALES
+FROM TRNMAIN A
+JOIN TRNPROD B ON A.VCHRNO = B.VCHRNO
+JOIN MENUITEM MI ON B.MCODE = MI.MCODE
+LEFT JOIN RMD_ACLIST R ON MI.Supplier = R.ACID
+WHERE A.TRNDATE BETWEEN @DATE1 AND @DATE2 AND A.VoucherType = 'TI'
+AND (@COMPANYID = '%' OR A.COMPANYID IN (SELECT * FROM DBO.Split(@COMPANYID,',')))
+AND (@ACID = '%' OR R.ACID IN (SELECT * FROM DBO.Split(@ACID,',')))
+AND A.PCL = 'PC007'
+GROUP BY A.VCHRNO , B.MCODE
+
+
+DROP TABLE IF EXISTS #SALESRETURN
+
+SELECT TRIM(A.REFBILL) REFBILL , B.MCODE , SUM(REALQTY_IN) SALESRETURNQTY ,sum(ALTQTY_IN) SALESRETURNQTY_ALT
+INTO #SALESRETURN
+FROM TRNMAIN A
+JOIN TRNPROD B ON A.VCHRNO = B.VCHRNO
+JOIN MENUITEM MI ON B.MCODE = MI.MCODE
+LEFT JOIN RMD_ACLIST R ON MI.Supplier = R.ACID
+WHERE A.TRNDATE BETWEEN @DATE1 AND @DATE2 AND A.VoucherType = 'CN'
+AND (@COMPANYID = '%' OR A.COMPANYID IN (SELECT * FROM DBO.Split(@COMPANYID,',')))
+AND (@ACID = '%' OR R.ACID IN (SELECT * FROM DBO.Split(@ACID,',')))
+AND A.PCL = 'PC007'
+GROUP BY TRIM(A.REFBILL) , B.MCODE
+
+
+DROP TABLE IF EXISTS #RAWRDATA
+
+SELECT M.MCODE ProductCode ,M.DESCA ProductName , A.Type , SUM(ISNULL(CompAmount,0)) CompAmount , SUM(ISNULL(CompQty,0)) QTY , SUM(ISNULL(QtyCase,0)) ALTQTY
+INTO #RAWRDATA
+FROM	(
+		SELECT REFVCHR , VCHRNO ,ProductCode , ProductName , ExpenseTypeCode Type ,
+		IIF(ExpenseTypeCode = 'AC' , CAST((c.COMPSALESQTY - ISNULL(YY.SALESRETURNQTY,0)) * C.COMPLEMENTARYRATE AS NUMERIC(32,2)) , CAST(((c.COMPSALESQTY - ISNULL(YY.SALESRETURNQTY,0))*C.COMPLEMENTARYRATE) / 0.85 AS NUMERIC(32,2))) CompAmount ,
+		(C.COMPSALESQTY - ISNULL(SALESRETURNQTY,0)) CompQty , PARAC , C.MCODE
+		FROM #COMPSALES C
+		LEFT JOIN #SALESRETURN YY ON C.VCHRNO = YY.REFBILL AND C.MCODE = YY.MCODE
+		) A
+FULL JOIN	(
+			SELECT VCHRNO, A.MCODE ,ISNULL(A.SALESQTY,0) - ISNULL(C.SALESRETURNQTY,0) Qty ,
+			ISNULL(A.SALESQTY_ALT,0) - ISNULL(C.SALESRETURNQTY_ALT , 0) QtyCase
+			FROM #SALES A
+			LEFT JOIN #SALESRETURN C ON A.VCHRNO = C.REFBILL AND A.MCODE = C.MCODE
+			) B ON A.REFVCHR = B.VCHRNO AND A.MCODE = B.MCODE
+LEFT JOIN MENUITEM M ON ISNULL(A.MCODE , B.MCODE) = M.MCODE
+GROUP BY M.MCODE  ,M.DESCA , A.Type
+
+
+IF @CLAIMTYPE = 0
+BEGIN
+
+	SELECT 
+	ProductName AS [ProductName], SUM(ISNULL([PP],0)) AS [P4P Discounts] , SUM(ISNULL([NEV],0)) AS [Non Channel / Events] , 
+	SUM(ISNULL([PP],0))+SUM(ISNULL([NEV],0)) AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([PP],[NEV])
+			) B
+	GROUP BY ProductCode , ProductName
+	HAVING SUM(ISNULL([PP],0))+SUM(ISNULL([NEV],0)) <> 0
+
+	UNION ALL
+
+	SELECT CHAR(10)+CHAR(13) , NULL , NULL , NULL , 'R' FFLG
+
+	UNION ALL
+
+	SELECT 'Total' AS [ProductName], SUM(ISNULL([PP],0)) AS [P4P Discounts] , SUM(ISNULL([NEV],0)) AS [Non Channel / Events] ,
+	(SUM(ISNULL([PP],0))+SUM(ISNULL([NEV],0))) AS [Total] , 'B' FFLG
+ 	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([PP],[NEV])
+			) B
+	HAVING SUM(ISNULL([PP],0))+SUM(ISNULL([NEV],0)) <> 0
+
+	UNION ALL
+
+	SELECT 'Less: TDS (15%)' AS [ProductName], SUM(ISNULL([PP],0)) * 0.15 AS [P4P Discounts], SUM(ISNULL([NEV],0)) * 0.15 AS [Non Channel / Events],
+	(SUM(ISNULL([PP],0))+SUM(ISNULL([NEV],0))) * 0.15 AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([PP],[NEV])
+			) B
+	HAVING SUM(ISNULL([PP],0))++SUM(ISNULL([NEV],0)) <> 0
+
+	UNION ALL
+
+	SELECT 'Net Amount' AS [ProductName], SUM(ISNULL([PP],0)) * 0.85 AS [P4P Discounts] , SUM(ISNULL([NEV],0)) * 0.85 AS [Non Channel / Events] ,
+	(SUM(ISNULL([PP],0))+SUM(ISNULL([NEV],0))) * 0.85 AS [Total] , 'B' FFLG
+ 	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([PP],[NEV])
+			) B
+	HAVING SUM(ISNULL([PP],0))+SUM(ISNULL([NEV],0)) <> 0
+
+END
+
+ELSE IF @CLAIMTYPE = 1
+BEGIN
+
+	SELECT 
+	ProductName AS [ProductName], SUM(ISNULL([BC],0)) AS [Sponsorship Brand Marketing], SUM(ISNULL([BC],0)) AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([BC])
+			) B
+	GROUP BY ProductCode , ProductName
+	HAVING SUM(ISNULL([BC],0)) <> 0
+
+	UNION ALL
+
+	SELECT CHAR(10)+CHAR(13) , NULL , NULL , 'R' FFLG
+
+	UNION ALL
+
+	SELECT 
+	'Total' AS [ProductName], SUM(ISNULL([BC],0)) AS [Sponsorship Brand Marketing], SUM(ISNULL([BC],0)) AS [Total] , 'B' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([BC])
+			) B
+	HAVING SUM(ISNULL([BC],0)) <> 0
+
+	UNION ALL
+
+	SELECT 
+	'Less: TDS (15%)' [ProductName], SUM(ISNULL([BC],0)) * 0.15 AS [Sponsorship Brand Marketing], SUM(ISNULL([BC],0)) * 0.15 AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([BC])
+			) B
+	HAVING SUM(ISNULL([BC],0)) <> 0
+
+	UNION ALL
+
+	SELECT 
+	'Net Amount' [ProductName], SUM(ISNULL([BC],0)) * 0.85 AS [Sponsorship Brand Marketing], (SUM(ISNULL([BC],0)) * 0.85) AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([BC])
+			) B
+	HAVING SUM(ISNULL([BC],0)) <> 0
+
+END
+
+ELSE IF @CLAIMTYPE = 2
+BEGIN
+
+	SELECT 
+	ProductName AS [ProductName], SUM(ISNULL([AC],0)) AS [Admin Claim], SUM(ISNULL([AC],0)) AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([AC])
+			) B
+	GROUP BY ProductCode , ProductName
+	HAVING SUM(ISNULL([AC],0)) <> 0
+
+	UNION ALL
+
+	SELECT CHAR(10)+CHAR(13) , NULL , NULL , 'R' FFLG
+
+	UNION ALL
+
+	SELECT
+	'Total' AS [ProductName], SUM(ISNULL([AC],0)) AS [Admin Claim], SUM(ISNULL([AC],0)) AS [Total] , 'B' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([AC])
+			) B
+	HAVING SUM(ISNULL([AC],0)) <> 0
+
+	UNION ALL
+
+	SELECT 
+	'Less: TDS (15%)' [ProductName], 0 AS [Admin Claim], 0 AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([AC])
+			) B
+	HAVING SUM(ISNULL([AC],0)) <> 0
+
+	UNION ALL
+
+	SELECT 
+	'Net Amount' [ProductName], SUM(ISNULL([AC],0)) AS [Admin Claim], SUM(ISNULL([AC],0)) AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([AC])
+			) B
+	HAVING SUM(ISNULL([AC],0)) <> 0
+
+END
+ELSE IF @CLAIMTYPE = 3
+BEGIN
+
+	SELECT 
+	ProductName AS [ProductName],  SUM(ISNULL([TVB],0)) AS [Tie-up Volume Based], SUM(ISNULL([TEX],0)) AS [Tie-up Display and Exclusive], 
+	SUM(ISNULL([TVB],0))+SUM(ISNULL([TEX],0)) AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([TVB],[TEX])
+			) B
+	GROUP BY ProductCode , ProductName
+	HAVING SUM(ISNULL([TVB],0))+SUM(ISNULL([TEX],0)) <> 0
+
+	UNION ALL
+
+	SELECT CHAR(10)+CHAR(13) , NULL , NULL , NULL , 'R' FFLG
+
+	UNION ALL
+
+	SELECT 'Total' AS [ProductName] , SUM(ISNULL([TVB],0)) AS [Tie-up Volume Based], SUM(ISNULL([TEX],0)) AS [Tie-up Display and Exclusive], 
+	(SUM(ISNULL([TVB],0))+SUM(ISNULL([TEX],0))) AS [Total] , 'B' FFLG
+ 	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([TVB],[TEX])
+			) B
+	HAVING SUM(ISNULL([TVB],0))+SUM(ISNULL([TEX],0)) <> 0
+
+	UNION ALL
+
+	SELECT 'Less: TDS (15%)' AS [ProductName], SUM(ISNULL([TVB],0)) * 0.15 AS [Tie-up Volume Based],
+	SUM(ISNULL([TEX],0)) * 0.15 AS [Tie-up Display and Exclusive], (SUM(ISNULL([TVB],0))+SUM(ISNULL([TEX],0))) * 0.15 AS [Total] , 'R' FFLG
+ 	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([TVB],[TEX])
+			) B
+	HAVING SUM(ISNULL([TVB],0))+SUM(ISNULL([TEX],0)) <> 0
+
+	UNION ALL
+
+	SELECT 'Net Amount' AS [ProductName], SUM(ISNULL([TVB],0)) * 0.85 AS [Tie-up Volume Based],
+	SUM(ISNULL([TEX],0)) * 0.85 AS [Tie-up Display and Exclusive] , (SUM(ISNULL([TVB],0))+SUM(ISNULL([TEX],0))) * 0.85 AS [Total] , 'B' FFLG
+ 	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([TVB],[TEX])
+			) B
+	HAVING SUM(ISNULL([TVB],0))+SUM(ISNULL([TEX],0)) <> 0
+
+END
+ELSE IF @CLAIMTYPE = 4
+BEGIN
+
+	SELECT 
+	ProductName AS [ProductName], SUM(ISNULL([OP],0)) AS [Outlet Promotion] , SUM(ISNULL([OP],0)) AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([OP])
+			) B
+	GROUP BY ProductCode , ProductName
+	HAVING SUM(ISNULL([OP],0)) <> 0
+
+	UNION ALL
+
+	SELECT CHAR(10)+CHAR(13) , NULL , NULL , 'R' FFLG
+
+	UNION ALL
+
+	SELECT 'Total' AS [ProductName], SUM(ISNULL([OP],0)) AS [Outlet Promotion] , SUM(ISNULL([OP],0)) AS [Total] , 'B' FFLG
+ 	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([OP])
+			) B
+	HAVING SUM(ISNULL([OP],0)) <> 0
+
+	UNION ALL
+
+	SELECT 'Less: TDS (15%)' AS [ProductName] , SUM(ISNULL([OP],0)) * 0.15 AS [Outlet Promotion],
+	SUM(ISNULL([OP],0)) * 0.15 AS [Total] , 'R' FFLG
+	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([OP])
+			) B
+	HAVING SUM(ISNULL([OP],0)) <> 0
+
+	UNION ALL
+
+	SELECT 'Net Amount' AS [ProductName] , SUM(ISNULL([OP],0)) * 0.85 AS [Outlet Promotion] , SUM(ISNULL([OP],0)) * 0.85 AS [Total] , 'B' FFLG
+ 	FROM #RAWRDATA A
+	PIVOT	(
+			SUM(CompAmount) FOR Type in ([OP])
+			) B
+	HAVING SUM(ISNULL([OP],0)) <> 0
+
+END
+ELSE
+BEGIN
+
+	SELECT ProductName AS [ProductName], SUM(ALTQTY) [Sales (CS)] , SUM(ALTQTY * (10.00/ 1.15)) [Approved Budget @8.5] ,
+	SUM(IIF(TYPE = 'MKB',ISNULL(QTY,0) ,0)) AS [Breakage Exchanged in Market (PCS)] ,
+	SUM(IIF(TYPE = 'MKB' , CompAmount ,0)) AS [Breakage Exchanged in Market (Amount)], SUM(ALTQTY * 10.00) [Approved Bonous] , 'R' FFLG
+	FROM #RAWRDATA A
+	GROUP BY ProductCode , ProductName
+
+	UNION ALL
+
+	SELECT CHAR(10)+CHAR(13) , NULL , NULL , NULL , NULL ,NULL , 'R' FFLG
+
+	UNION ALL
+
+	SELECT 'Total' AS [ProductName], SUM(ISNULL(ALTQTY,0)) [Sales (CS)] ,
+	SUM(ALTQTY * (10.00/ 1.15)) [Approved Budget @8.5] ,
+	SUM(IIF(TYPE = 'MKB',ISNULL(QTY,0) ,0)) AS [Breakage Exchanged in Market (PCS)] ,
+	SUM(IIF(TYPE = 'MKB' , CompAmount ,0)) AS [Breakage Exchanged in Market (Amount)], SUM(ALTQTY * 10.00) [Approved Bonous] ,  'B' FFLG
+	FROM #RAWRDATA A
+
+END
+
