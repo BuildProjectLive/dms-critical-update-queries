@@ -1032,3 +1032,12 @@ ALTER TABLE RMD_ORDERMAIN ADD SSMCODE varchar(50)
 
 if not exists (select * from information_schema.columns where table_name = 'setting' and COLUMN_NAME = 'EnableLateACPosting_TransferOut')
 alter table setting add EnableLateACPosting_TransferOut tinyint null default (0) with values
+
+IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE COLUMN_NAME = 'prate' AND TABLE_NAME = 'Trnprod_SUMMARY')
+alter table Trnprod_SUMMARY alter column prate numeric(18,6)
+
+IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE COLUMN_NAME = 'prate' AND TABLE_NAME = 'PURPROD_SUMMARY')
+alter table PURPROD_SUMMARY alter column prate numeric(18,6)
+
+IF NOT EXISTS(SELECT *FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'RMD_ORDERMAIN' AND COLUMN_NAME = 'VATNO')
+ALTER TABLE RMD_ORDERMAIN ADD VATNO VARCHAR(50) NULL;
